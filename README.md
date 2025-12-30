@@ -55,3 +55,8 @@ Weather and location data are used **only** to display local weather and are nev
 1. Download or clone this repository:
    ```bash
    git clone https://github.com/geanpaulo19/zen-new-tab.git
+
+2.	Open Chrome Extensions: chrome://extensions/
+3.	Enable Developer mode (top-right toggle)
+4.	Click Load unpacked → select the cloned folder
+5.	Open a new tab to see Zen New Tab in action
