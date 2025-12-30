@@ -19,6 +19,19 @@ Zen New Tab replaces your default new tab with a calm interface featuring time, 
 
 ---
 
+## 📸 Screenshots
+
+### Home / Default View
+![Home Screenshot](screenshots/home.png)
+
+### Weather Widget
+![Weather Screenshot](screenshots/weather.png)
+
+### Calendar Tooltip
+![Calendar Screenshot](screenshots/calendar.png)
+
+---
+
 ## 🔐 Privacy
 
 Zen New Tab does **not** collect, store, or sell personal data.
@@ -31,7 +44,7 @@ Zen New Tab does **not** collect, store, or sell personal data.
 Weather and location data are used **only** to display local weather and are never stored remotely.
 
 👉 Read the full Privacy Policy here:  
-**https://geanpaulo19.github.io/zen-new-tab-privacy/privacy.html**
+[Privacy Policy](https://geanpaulo19.github.io/zen-new-tab-privacy/privacy.html)
 
 ---
 
