@@ -253,12 +253,12 @@ function showToast(message) {
 })();
 
 /* =========================
-   RANDOM QUOTES WITH API ROTATION
+   RANDOM QUOTES WITH API ROTATION (Stable)
 ========================= */
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
-const MIN_FETCH_INTERVAL = 30 * 1000; // 30s
+const MIN_FETCH_INTERVAL = 30 * 1000; // 30 seconds between fetches
 const MAX_RETRIES = 3;
 const BASE_BACKOFF = 1000;
 
@@ -289,8 +289,36 @@ const QUOTE_APIS = [
 ];
 
 function getRandomApi() {
-  const index = Math.floor(Math.random() * QUOTE_APIS.length);
-  return QUOTE_APIS[index];
+  return QUOTE_APIS[Math.floor(Math.random() * QUOTE_APIS.length)];
+}
+
+async function fetchQuoteFromApi(api) {
+  let attempts = 0;
+  while (attempts < MAX_RETRIES) {
+    try {
+      const res = await fetch(api.url, { cache: "no-store" });
+      if (!res.ok) throw new Error(res.status);
+      const data = await res.json();
+
+      if (!api.bulk) {
+        const parsed = api.parse(data);
+        if (parsed.text && parsed.text.length <= 140) return parsed;
+      } else if (Array.isArray(data) && data.length) {
+        const validQuotes = data.filter(q => q.text && q.text.length <= 140);
+        if (validQuotes.length) {
+          const random = validQuotes[Math.floor(Math.random() * validQuotes.length)];
+          return { text: random.text, author: random.author || "Unknown" };
+        }
+      }
+      break;
+    } catch (err) {
+      attempts++;
+      const backoff = BASE_BACKOFF * Math.pow(2, attempts - 1);
+      console.warn(`[Quote] ${api.name} failed (attempt ${attempts})`, err);
+      await sleep(backoff);
+    }
+  }
+  return null;
 }
 
 async function setRandomQuote() {
@@ -303,65 +331,27 @@ async function setRandomQuote() {
   const cache = JSON.parse(localStorage.getItem("quoteCache") || "{}");
   const now = Date.now();
 
+  // Use cached quote if still fresh
   if (cache.time && (now - cache.time) < MIN_FETCH_INTERVAL && cache.text) {
     renderQuote(quoteEl, cache.text, cache.author);
     return;
   }
 
-  let quoteText = "";
-  let quoteAuthor = "";
-
-  const apis = [...QUOTE_APIS];
-  while (apis.length && !quoteText) {
-    const apiIndex = Math.floor(Math.random() * apis.length);
-    const api = apis.splice(apiIndex, 1)[0];
-    let attempts = 0;
-
-    while (attempts < MAX_RETRIES) {
-      try {
-        const res = await fetch(api.url, { cache: "no-store" });
-        if (!res.ok) throw new Error(res.status);
-
-        const data = await res.json();
-
-        if (!api.bulk) {
-          const parsed = api.parse(data);
-          if (parsed.text && parsed.text.length <= 140) {
-            quoteText = parsed.text;
-            quoteAuthor = parsed.author;
-            break;
-          }
-        } else if (api.bulk && Array.isArray(data) && data.length) {
-          // Pick only one quote randomly from bulk
-          const validQuotes = data.filter(q => q.text && q.text.length <= 140);
-          if (validQuotes.length) {
-            const random = validQuotes[Math.floor(Math.random() * validQuotes.length)];
-            quoteText = random.text;
-            quoteAuthor = random.author || "Unknown";
-            break;
-          }
-        }
-      } catch (err) {
-        attempts++;
-        const backoff = BASE_BACKOFF * Math.pow(2, attempts - 1);
-        console.warn(`[Quote] ${api.name} failed (attempt ${attempts})`, err);
-        await sleep(backoff);
-      }
-    }
+  // Try APIs in random order until one succeeds
+  const apis = [...QUOTE_APIS].sort(() => Math.random() - 0.5);
+  let quote = null;
+  for (const api of apis) {
+    quote = await fetchQuoteFromApi(api);
+    if (quote) break;
   }
 
-  if (!quoteText) {
-    if (cache.text) {
-      quoteText = cache.text;
-      quoteAuthor = cache.author;
-    } else {
-      quoteText = "Stay inspired today.";
-      quoteAuthor = "";
-    }
+  // Fallback to cache or default if all APIs fail
+  if (!quote) {
+    quote = cache.text ? { text: cache.text, author: cache.author } : { text: "Stay inspired today.", author: "" };
   }
 
-  localStorage.setItem("quoteCache", JSON.stringify({ text: quoteText, author: quoteAuthor, time: Date.now() }));
-  renderQuote(quoteEl, quoteText, quoteAuthor);
+  localStorage.setItem("quoteCache", JSON.stringify({ ...quote, time: Date.now() }));
+  renderQuote(quoteEl, quote.text, quote.author);
 }
 
 function renderQuote(el, text, author) {
@@ -369,13 +359,17 @@ function renderQuote(el, text, author) {
     <div>"${text}"</div>
     <div style="font-size:0.55em; margin-top:3px; opacity:0.7;">${author}</div>
   `;
-  requestAnimationFrame(() => (el.style.opacity = "1"));
+  requestAnimationFrame(() => el.style.opacity = "1");
 }
 
-window.addEventListener("DOMContentLoaded", setRandomQuote);
+// Rotate quote every MIN_FETCH_INTERVAL for dynamic refresh
+window.addEventListener("DOMContentLoaded", () => {
+  setRandomQuote();
+  setInterval(setRandomQuote, MIN_FETCH_INTERVAL);
+});
 
 /* =========================
-   WEATHER FUNCTIONS
+   WEATHER FUNCTIONS (Chrome-safe)
 ========================= */
 
 const WEATHER_TTL = 15 * 60 * 1000; // 15 minutes cache
@@ -406,10 +400,7 @@ function getWeatherVisual(code, isDay) {
 
 async function fetchLocationName(lat, lon) {
   try {
-    const res = await fetch(
-      `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lon}`,
-      { headers:{ "User-Agent":"Zen-New-Tab" } }
-    );
+    const res = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lon}`);
     const j = await res.json();
     return j.address?.city || j.address?.town || j.address?.village || j.address?.state || "";
   } catch {
@@ -419,7 +410,6 @@ async function fetchLocationName(lat, lon) {
 
 function animateWeatherIcon(iconEl, severe) {
   if (!iconEl) return;
-
   iconEl.style.display = "inline-block";
   iconEl.style.transformOrigin = "center";
 
@@ -478,7 +468,7 @@ function buildHourlyTooltip(hourly, sunrise, sunset) {
 function setWeather(el, data, offline = false) {
   if (!el) return;
 
-  // Show loading if data is not yet available and not offline
+  // Show loading if no data yet
   if (!data && !offline) {
     el.innerHTML = `
       <span id="weather-icon" style="font-size:1.3rem;">⏳</span>
@@ -487,10 +477,10 @@ function setWeather(el, data, offline = false) {
     return;
   }
 
-  if (offline) {
+  if (offline || !data) {
     el.innerHTML = `
       <span id="weather-icon" style="font-size:1.3rem;">📡</span>
-      Browser is offline. Unable to retrieve weather data.
+      Unable to retrieve weather data.
     `;
     return;
   }
@@ -566,11 +556,15 @@ async function renderWeatherData(force = false) {
     return;
   }
 
-  // Show loading immediately
+  // Show loading
   setWeather(el, null);
 
   navigator.geolocation.getCurrentPosition(
     async pos => {
+      if (!pos) {
+        setWeather(el, null, true);
+        return;
+      }
       const { latitude, longitude } = pos.coords;
 
       try {
@@ -612,11 +606,7 @@ async function renderWeatherData(force = false) {
     },
     err => {
       console.warn("[Weather] Location denied or unavailable:", err);
-      el.style.display = "none";
-      if (el._weatherTooltipAdded) {
-        const existingTip = document.getElementById("weather-tip");
-        existingTip?.remove();
-      }
+      setWeather(el, null, true);
     },
     { enableHighAccuracy: true, timeout: 5000, maximumAge: 0 }
   );
