@@ -697,21 +697,69 @@ window.addEventListener("DOMContentLoaded", () => {
    BACKGROUND FUNCTIONS
 ========================= */
 const VERCEL_UNSPLASH_URL = "https://nextjs-three-coral-93.vercel.app/api/unsplash";
+const VERCEL_PEXELS_URL = "https://zen-backgrounds.vercel.app/api/pexels";
+const LOREM_PICSUM_LIST_URL = "https://picsum.photos/v2/list?page=2&limit=100";
 
-async function fetchRandomBackground() {
+let picsumCache = [];
+
+async function fetchBackgroundFromApi(url) {
   try {
-    const res = await fetch(VERCEL_UNSPLASH_URL);
+    const res = await fetch(url);
+    if (!res.ok) throw new Error("Failed to fetch");
     const d = await res.json();
-    return {
-      url: d.urls?.raw ? d.urls.raw + "&w=1440&q=75&fm=jpg&fit=max" : "",
-      author: d.user?.name || ""
-    };
-  } catch {
-    return { url:"", author:"" };
+
+    // Unsplash
+    if (d.urls?.raw) {
+      return {
+        url: d.urls.raw + "&w=1440&q=75&fm=jpg&fit=max",
+        author: d.user?.name || "",
+        source: "Unsplash",
+        link: d.links?.html || ""
+      };
+    }
+
+    // Pexels
+    if (d.url) {
+      return {
+        url: d.url + "?auto=compress&h=1440",
+        author: d.author || "",
+        source: "Pexels",
+        link: d.url
+      };
+    }
+
+    // Lorem Picsum (array)
+    if (url === LOREM_PICSUM_LIST_URL && Array.isArray(d)) {
+      if (!picsumCache.length) picsumCache = d; // cache the list
+      const randomPic = picsumCache[Math.floor(Math.random() * picsumCache.length)];
+      return {
+        url: `https://picsum.photos/id/${randomPic.id}/1440/900`,
+        author: randomPic.author,
+        source: "Lorem Picsum",
+        link: randomPic.url
+      };
+    }
+
+  } catch (err) {
+    console.warn("Background fetch failed:", url, err);
   }
+
+  return null;
 }
 
-function setBackground(url, author) {
+async function fetchRandomBackground() {
+  const apis = [VERCEL_UNSPLASH_URL, VERCEL_PEXELS_URL, LOREM_PICSUM_LIST_URL];
+  const shuffled = apis.sort(() => Math.random() - 0.5);
+
+  for (const api of shuffled) {
+    const result = await fetchBackgroundFromApi(api);
+    if (result && result.url) return result;
+  }
+
+  return { url:"", author:"", source:"", link:"" }; // fallback black background
+}
+
+function setBackground(url, author, source, link) {
   let bg = document.getElementById("bg-fade");
   if (!bg) {
     bg = document.createElement("div");
@@ -719,27 +767,30 @@ function setBackground(url, author) {
     bg.style.cssText = `position:fixed;top:0;left:0;width:100%;height:100%;background-size:cover;background-position:center;opacity:0;transition:opacity 1s ease;z-index:-1;`;
     document.body.appendChild(bg);
   }
-  bg.style.backgroundImage = url ? `url(${url})` : "";
+  if (url) bg.style.backgroundImage = `url(${url})`;
+
   requestAnimationFrame(() => bg.style.opacity = "1");
 
-  const oldCredit = document.getElementById("unsplash-credit");
+  const oldCredit = document.getElementById("bg-credit");
   oldCredit?.remove();
 
-  if (author) {
+  if (author || source) {
     const credit = document.createElement("div");
-    credit.id = "unsplash-credit";
+    credit.id = "bg-credit";
     credit.textContent = "📷";
     credit.style.cssText = `position:fixed;bottom:12px;right:12px;width:24px;height:24px;display:flex;align-items:center;justify-content:center;font-size:0.85rem;color:rgba(255,255,255,0.6);background:rgba(0,0,0,0.15);border-radius:50%;z-index:10;cursor:default;transition: background 0.2s, color 0.2s;`;
+
     let tooltip;
     credit.addEventListener("mouseenter", () => {
       credit.style.background = "rgba(0,0,0,0.3)";
       credit.style.color = "rgba(255,255,255,0.9)";
       tooltip = document.createElement("div");
-      tooltip.textContent = `Photo by ${author} on Unsplash`;
+      tooltip.innerHTML = `${author ? `Photo by ${author}` : "Photo"}${source ? ` (${source})` : ""}${link ? ` <a href="${link}" target="_blank" style="color:#fff;text-decoration:underline;">link</a>` : ""}`;
       tooltip.style.cssText = `position:fixed;bottom:40px;right:12px;padding:4px 8px;font-size:0.75rem;color:#fff;background:rgba(0,0,0,0.7);border-radius:999px;opacity:0;pointer-events:none;transition: opacity 0.2s ease;z-index:11;white-space:nowrap;`;
       document.body.appendChild(tooltip);
       requestAnimationFrame(()=> tooltip.style.opacity = "1");
     });
+
     credit.addEventListener("mouseleave", () => {
       credit.style.background = "rgba(0,0,0,0.15)";
       credit.style.color = "rgba(255,255,255,0.6)";
@@ -749,6 +800,7 @@ function setBackground(url, author) {
         tooltip = null;
       }
     });
+
     document.body.appendChild(credit);
   }
 }
@@ -756,11 +808,12 @@ function setBackground(url, author) {
 window.addEventListener("DOMContentLoaded", async () => {
   const today = new Date().toISOString().slice(0,10);
   const bgCache = JSON.parse(localStorage.getItem("bgCache") || "{}");
+
   if (bgCache?.date === today && bgCache?.url) {
-    setBackground(bgCache.url, bgCache.author);
+    setBackground(bgCache.url, bgCache.author, bgCache.source, bgCache.link);
   } else {
     const result = await fetchRandomBackground();
-    setBackground(result.url, result.author);
+    setBackground(result.url, result.author, result.source, result.link);
     localStorage.setItem("bgCache", JSON.stringify({ ...result, date: today }));
   }
 });
