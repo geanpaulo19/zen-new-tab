@@ -48,12 +48,12 @@ function updateTimeDigits(force = false) {
     hour12: !use24Hour
   });
 
-  // Strip AM/PM if using 12-hour format
+  // Strip AM/PM if using 12‑hour format
   if (!use24Hour) {
     rawTime = rawTime.replace(/\s?(AM|PM|am|pm)$/i, "");
   }
 
-  // Reinitialize spans if first run, forced, or length changed (hour rollover)
+  // Re‑initialize spans if first run, forced, or length changed (hour rollover)
   if (!timeEl._spans || force || timeEl._spans.length !== rawTime.length) {
     timeEl._spans = initTimeSpans(rawTime);
   } else {
@@ -192,10 +192,10 @@ function showToast(message) {
     const weekdays = ["Su","Mo","Tu","We","Th","Fr","Sa"];
     weekdays.forEach(d => html += `<div style="font-weight:bold;color:rgba(255,255,255,0.7);">${d}</div>`);
 
-    for(let i=0;i<firstDay;i++) html += `<div></div>`; // empty slots
+    for (let i = 0; i < firstDay; i++) html += `<div></div>`; // empty slots
 
-    for(let d=1;d<=lastDate;d++){
-      const isToday = d===date.getDate();
+    for (let d = 1; d <= lastDate; d++) {
+      const isToday = d === date.getDate();
       html += `<div style="
         padding:4px 0;
         border-radius:4px;
@@ -228,7 +228,6 @@ function showToast(message) {
       transition: opacity 0.2s ease;
       box-shadow: 0 3px 10px rgba(0,0,0,0.25);
     `;
-
     document.body.appendChild(tip);
 
     const rect = dateEl.getBoundingClientRect();
@@ -254,41 +253,126 @@ function showToast(message) {
 })();
 
 /* =========================
-   RANDOM SHORT QUOTE FUNCTIONS
+   RANDOM SHORT QUOTE FUNCTIONS (UPDATED)
 ========================= */
+
+/**
+ * Helper – sleep for `ms` milliseconds.
+ */
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+/**
+ * Configuration – adjust these values if the API changes its limits.
+ */
+const QUOTE_API          = "https://quoteslate.vercel.app/api/quotes/random";
+const MIN_FETCH_INTERVAL = 30 * 1000;   // 30 seconds between *any* two network calls
+const MAX_RETRIES        = 5;          // how many exponential‑back‑off attempts we make
+const BASE_BACKOFF       = 1_000;      // start with 1 second, then 2 s, 4 s, …
+
 async function setRandomQuote() {
   const quoteEl = document.getElementById("mantra");
   if (!quoteEl) return;
+
+  // Fade out while we work
   quoteEl.style.opacity = "0";
   quoteEl.style.transition = "opacity 1s ease";
 
-  const MAX_ATTEMPTS = 5;
-  let quoteText = "", quoteAuthor = "";
-  for (let attempts = 0; attempts < MAX_ATTEMPTS; attempts++) {
+  // -------------------------------------------------
+  // 1️⃣ Load cached quote (if any)
+  // -------------------------------------------------
+  const cache = JSON.parse(localStorage.getItem("quoteCache") || "{}");
+  const now   = Date.now();
+
+  // -------------------------------------------------
+  // 2️⃣ Decide whether we are allowed to hit the network
+  // -------------------------------------------------
+  const canFetch = !cache.time || (now - cache.time) >= MIN_FETCH_INTERVAL;
+
+  // -------------------------------------------------
+  // 3️⃣ If we can't fetch, just show the cached quote
+  // -------------------------------------------------
+  if (!canFetch && cache.text) {
+    renderQuote(quoteEl, cache.text, cache.author);
+    return;
+  }
+
+  // -------------------------------------------------
+  // 4️⃣ Otherwise attempt to fetch with exponential back‑off
+  // -------------------------------------------------
+  let quoteText   = "";
+  let quoteAuthor = "";
+  let attempts    = 0;
+
+  while (attempts < MAX_RETRIES) {
     try {
-      const res = await fetch("https://quoteslate.vercel.app/api/quotes/random");
-      if (!res.ok) continue;
-      const data = await res.json();
-      if (data.quote && data.quote.length <= 120) {
-        quoteText = data.quote;
-        quoteAuthor = (data.author || "Unknown").replace(/^[-–—]\s*/, "");
-        break;
+      const res = await fetch(QUOTE_API, { cache: "no-store" });
+
+      // -------------------------------------------------
+      // 4a️⃣ 2xx – success
+      // -------------------------------------------------
+      if (res.ok) {
+        const data = await res.json();
+        if (data.quote && data.quote.length <= 120) {
+          quoteText   = data.quote;
+          quoteAuthor = (data.author || "Unknown").replace(/^[-–—]\s*/, "");
+          // Store the fresh quote in the cache for next time
+          localStorage.setItem(
+            "quoteCache",
+            JSON.stringify({ text: quoteText, author: quoteAuthor, time: Date.now() })
+          );
+          break; // success – exit retry loop
+        }
       }
-    } catch {}
+
+      // -------------------------------------------------
+      // 4b️⃣ 429 (or any non‑OK) – treat as retry‑able
+      // -------------------------------------------------
+      attempts++;
+      const backoff = BASE_BACKOFF * Math.pow(2, attempts - 1); // 1s,2s,4s…
+      console.warn(`[Quote] Attempt ${attempts} failed (status ${res.status}). Back‑off ${backoff} ms`);
+      await sleep(backoff);
+    } catch (e) {
+      // -------------------------------------------------
+      // 4c️⃣ Network error – also retry
+      // -------------------------------------------------
+      attempts++;
+      const backoff = BASE_BACKOFF * Math.pow(2, attempts - 1);
+      console.warn(`[Quote] Network error on attempt ${attempts}:`, e);
+      await sleep(backoff);
+    }
   }
 
+  // -------------------------------------------------
+  // 5️⃣ If we still have nothing, fall back to cache or default
+  // -------------------------------------------------
   if (!quoteText) {
-    quoteText = "Stay inspired today!";
-    quoteAuthor = "";
+    if (cache.text) {
+      quoteText   = cache.text;
+      quoteAuthor = cache.author;
+    } else {
+      quoteText   = "Stay inspired today!";
+      quoteAuthor = "";
+    }
   }
 
-  quoteEl.innerHTML = `
-    <div>"${quoteText}"</div>
-    <div style="font-size:0.55em; margin-top:3px; opacity:0.7;">${quoteAuthor}</div>
-  `;
-  requestAnimationFrame(() => quoteEl.style.opacity = "1");
+  // -------------------------------------------------
+  // 6️⃣ Render (fade‑in) the final quote
+  // -------------------------------------------------
+  renderQuote(quoteEl, quoteText, quoteAuthor);
 }
 
+/**
+ * Helper – writes the quote into the DOM and fades it back in.
+ */
+function renderQuote(el, text, author) {
+  el.innerHTML = `
+    <div>"${text}"</div>
+    <div style="font-size:0.55em; margin-top:3px; opacity:0.7;">${author}</div>
+  `;
+  requestAnimationFrame(() => el.style.opacity = "1");
+}
+
+/* Kick‑off on first load */
 window.addEventListener("DOMContentLoaded", setRandomQuote);
 
 /* =========================
@@ -416,7 +500,7 @@ function setWeather(el, data, offline = false) {
   `;
   animateWeatherIcon(document.getElementById("weather-icon"), data.severe);
 
-  // Tooltip
+  // Tooltip (only create once)
   if (!el._weatherTooltipAdded) {
     let tip;
     el.addEventListener("mouseenter", () => {
@@ -457,7 +541,7 @@ function setWeather(el, data, offline = false) {
 }
 
 /* -------- FETCH WEATHER DATA -------- */
-async function renderWeatherData(force=false) {
+async function renderWeatherData(force = false) {
   const el = document.getElementById("weather");
   if (!el || !navigator.geolocation) return;
 
@@ -508,7 +592,6 @@ async function renderWeatherData(force=false) {
 
       localStorage.setItem("weatherData", JSON.stringify({ data, time: Date.now() }));
       setWeather(el, data);
-
     } catch {
       setWeather(el, null, true);
     }
@@ -554,8 +637,13 @@ async function fetchRandomBackground() {
   try {
     const res = await fetch(VERCEL_UNSPLASH_URL);
     const d = await res.json();
-    return { url: d.urls?.raw ? d.urls.raw+"&w=1440&q=75&fm=jpg&fit=max" : "", author: d.user?.name || "" };
-  } catch { return { url:"", author:"" }; }
+    return {
+      url: d.urls?.raw ? d.urls.raw + "&w=1440&q=75&fm=jpg&fit=max" : "",
+      author: d.user?.name || ""
+    };
+  } catch {
+    return { url:"", author:"" };
+  }
 }
 
 function setBackground(url, author) {
@@ -569,7 +657,9 @@ function setBackground(url, author) {
   bg.style.backgroundImage = url ? `url(${url})` : "";
   requestAnimationFrame(() => bg.style.opacity = "1");
 
-  const oldCredit = document.getElementById("unsplash-credit"); oldCredit?.remove();
+  const oldCredit = document.getElementById("unsplash-credit");
+  oldCredit?.remove();
+
   if (author) {
     const credit = document.createElement("div");
     credit.id = "unsplash-credit";
@@ -577,18 +667,22 @@ function setBackground(url, author) {
     credit.style.cssText = `position:fixed;bottom:12px;right:12px;width:24px;height:24px;display:flex;align-items:center;justify-content:center;font-size:0.85rem;color:rgba(255,255,255,0.6);background:rgba(0,0,0,0.15);border-radius:50%;z-index:10;cursor:default;transition: background 0.2s, color 0.2s;`;
     let tooltip;
     credit.addEventListener("mouseenter", () => {
-      credit.style.background="rgba(0,0,0,0.3)";
-      credit.style.color="rgba(255,255,255,0.9)";
+      credit.style.background = "rgba(0,0,0,0.3)";
+      credit.style.color = "rgba(255,255,255,0.9)";
       tooltip = document.createElement("div");
       tooltip.textContent = `Photo by ${author} on Unsplash`;
-      tooltip.style.cssText=`position:fixed;bottom:40px;right:12px;padding:4px 8px;font-size:0.75rem;color:#fff;background:rgba(0,0,0,0.7);border-radius:999px;opacity:0;pointer-events:none;transition: opacity 0.2s ease;z-index:11;white-space:nowrap;`;
+      tooltip.style.cssText = `position:fixed;bottom:40px;right:12px;padding:4px 8px;font-size:0.75rem;color:#fff;background:rgba(0,0,0,0.7);border-radius:999px;opacity:0;pointer-events:none;transition: opacity 0.2s ease;z-index:11;white-space:nowrap;`;
       document.body.appendChild(tooltip);
-      requestAnimationFrame(()=>tooltip.style.opacity="1");
+      requestAnimationFrame(()=> tooltip.style.opacity = "1");
     });
-    credit.addEventListener("mouseleave", ()=>{
-      credit.style.background="rgba(0,0,0,0.15)";
-      credit.style.color="rgba(255,255,255,0.6)";
-      if(tooltip){tooltip.style.opacity="0"; setTimeout(()=>tooltip?.remove(),200); tooltip=null;}
+    credit.addEventListener("mouseleave", () => {
+      credit.style.background = "rgba(0,0,0,0.15)";
+      credit.style.color = "rgba(255,255,255,0.6)";
+      if (tooltip) {
+        tooltip.style.opacity = "0";
+        setTimeout(() => tooltip?.remove(), 200);
+        tooltip = null;
+      }
     });
     document.body.appendChild(credit);
   }
@@ -597,11 +691,12 @@ function setBackground(url, author) {
 window.addEventListener("DOMContentLoaded", async () => {
   const today = new Date().toISOString().slice(0,10);
   const bgCache = JSON.parse(localStorage.getItem("bgCache") || "{}");
-  if (bgCache?.date === today && bgCache?.url) setBackground(bgCache.url, bgCache.author);
-  else {
+  if (bgCache?.date === today && bgCache?.url) {
+    setBackground(bgCache.url, bgCache.author);
+  } else {
     const result = await fetchRandomBackground();
     setBackground(result.url, result.author);
-    localStorage.setItem("bgCache", JSON.stringify({...result,date:today}));
+    localStorage.setItem("bgCache", JSON.stringify({ ...result, date: today }));
   }
 });
 
@@ -621,7 +716,7 @@ document.addEventListener("keydown", (e) => {
   if (key === "t") document.getElementById("time")?.click();
   if (key === "m") document.getElementById("mantra")?.classList.toggle("hidden");
   if (key === "w") document.getElementById("weather")?.classList.toggle("hidden");
-  if (key === "p" && typeof toggleParticles==="function") toggleParticles();
+  if (key === "p" && typeof toggleParticles === "function") toggleParticles();
 });
 
 /* =========================
@@ -633,44 +728,48 @@ let particleContainer = null;
 function initParticles() {
   if (!particlesEnabled || particleContainer) return;
   particleContainer = document.createElement("div");
-  particleContainer.id="particle-container";
-  particleContainer.style.cssText="position:fixed;inset:0;pointer-events:none;overflow:hidden;z-index:0;";
+  particleContainer.id = "particle-container";
+  particleContainer.style.cssText = "position:fixed;inset:0;pointer-events:none;overflow:hidden;z-index:0;";
   document.body.appendChild(particleContainer);
-  for(let i=0;i<16;i++){
-    const size=4+Math.random()*2;
-    const opacity=0.3+Math.random()*0.2;
-    const p=document.createElement("div");
-    p.style.cssText=`position:absolute;width:${size}px;height:${size}px;background:rgba(255,255,255,${opacity});border-radius:50%;top:${Math.random()*100}%;left:${Math.random()*100}%;animation:float-particle ${30+Math.random()*20}s linear infinite;`;
+  for (let i = 0; i < 16; i++) {
+    const size = 4 + Math.random() * 2;
+    const opacity = 0.3 + Math.random() * 0.2;
+    const p = document.createElement("div");
+    p.style.cssText = `position:absolute;width:${size}px;height:${size}px;background:rgba(255,255,255,${opacity});border-radius:50%;top:${Math.random()*100}%;left:${Math.random()*100}%;animation:float-particle ${30+Math.random()*20}s linear infinite;`;
     particleContainer.appendChild(p);
   }
 }
 
-function removeParticles(){ particleContainer?.remove(); particleContainer=null; }
-function toggleParticles(){ particlesEnabled=!particlesEnabled; localStorage.setItem("particlesEnabled", particlesEnabled); particlesEnabled?initParticles():removeParticles(); }
+function removeParticles() { particleContainer?.remove(); particleContainer = null; }
+function toggleParticles() {
+  particlesEnabled = !particlesEnabled;
+  localStorage.setItem("particlesEnabled", particlesEnabled);
+  particlesEnabled ? initParticles() : removeParticles();
+}
 
-if(!document.getElementById("particle-style")){
-  const style=document.createElement("style");
-  style.id="particle-style";
-  style.textContent=`@keyframes float-particle{from{transform:translateY(0);opacity:0.4;}to{transform:translateY(-120vh);opacity:0;}}`;
+if (!document.getElementById("particle-style")) {
+  const style = document.createElement("style");
+  style.id = "particle-style";
+  style.textContent = `@keyframes float-particle{from{transform:translateY(0);opacity:0.4;}to{transform:translateY(-120vh);opacity:0;}}`;
   document.head.appendChild(style);
 }
 
-function createParticleToggle(){
-  if(document.getElementById("particle-toggle"))return;
-  const info=document.getElementById("privacy-btn");
-  if(!info)return;
-  const btn=document.createElement("button");
-  btn.id="particle-toggle";
-  btn.textContent="✦";
-  btn.title="Toggle particles";
-  btn.style.cssText="position:fixed;bottom:12px;left:44px;width:24px;height:24px;border-radius:50%;border:none;background:rgba(0,0,0,0.15);color:rgba(255,255,255,0.6);font-size:0.8rem;cursor:pointer;z-index:10;transition: background 0.2s, color 0.2s;";
-  btn.onmouseenter=()=>{btn.style.background="rgba(0,0,0,0.3)"; btn.style.color="rgba(255,255,255,0.9)";};
-  btn.onmouseleave=()=>{btn.style.background="rgba(0,0,0,0.15)"; btn.style.color="rgba(255,255,255,0.6)";};
-  btn.onclick=toggleParticles;
+function createParticleToggle() {
+  if (document.getElementById("particle-toggle")) return;
+  const info = document.getElementById("privacy-btn");
+  if (!info) return;
+  const btn = document.createElement("button");
+  btn.id = "particle-toggle";
+  btn.textContent = "✦";
+  btn.title = "Toggle particles";
+  btn.style.cssText = "position:fixed;bottom:12px;left:44px;width:24px;height:24px;border-radius:50%;border:none;background:rgba(0,0,0,0.15);color:rgba(255,255,255,0.6);font-size:0.8rem;cursor:pointer;z-index:10;transition: background 0.2s, color 0.2s;";
+  btn.onmouseenter = () => { btn.style.background = "rgba(0,0,0,0.3)"; btn.style.color = "rgba(255,255,255,0.9)"; };
+  btn.onmouseleave = () => { btn.style.background = "rgba(0,0,0,0.15)"; btn.style.color = "rgba(255,255,255,0.6)"; };
+  btn.onclick = toggleParticles;
   document.body.appendChild(btn);
 }
 
-window.addEventListener("DOMContentLoaded", ()=>{
+window.addEventListener("DOMContentLoaded", () => {
   initParticles();
   createParticleToggle();
 });
