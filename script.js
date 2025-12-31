@@ -478,6 +478,15 @@ function buildHourlyTooltip(hourly, sunrise, sunset) {
 function setWeather(el, data, offline = false) {
   if (!el) return;
 
+  // Show loading if data is not yet available and not offline
+  if (!data && !offline) {
+    el.innerHTML = `
+      <span id="weather-icon" style="font-size:1.3rem;">⏳</span>
+      Loading weather...
+    `;
+    return;
+  }
+
   if (offline) {
     el.innerHTML = `
       <span id="weather-icon" style="font-size:1.3rem;">📡</span>
@@ -557,7 +566,9 @@ async function renderWeatherData(force = false) {
     return;
   }
 
-  // Ask for location permission
+  // Show loading immediately
+  setWeather(el, null);
+
   navigator.geolocation.getCurrentPosition(
     async pos => {
       const { latitude, longitude } = pos.coords;
@@ -601,7 +612,6 @@ async function renderWeatherData(force = false) {
     },
     err => {
       console.warn("[Weather] Location denied or unavailable:", err);
-      // Hide element and remove tooltip if denied
       el.style.display = "none";
       if (el._weatherTooltipAdded) {
         const existingTip = document.getElementById("weather-tip");
