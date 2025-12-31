@@ -253,22 +253,37 @@ function showToast(message) {
 })();
 
 /* =========================
-   RANDOM QUOTES (Persistent, 5-min Interval, Vercel Included)
+   RANDOM QUOTES (Persistent, Daily Refresh, Workers Primary)
 ========================= */
 
-const QUOTE_FETCH_INTERVAL = 5 * 60 * 1000; // 5 minutes
 const QUOTE_MAX_RETRIES = 3;
 const QUOTE_BACKOFF = 1000;
 
+// ------------------ APIs ------------------
 const QUOTE_APIS = [
   {
-    name: "ZenQuotes (Proxy)",
-    url: "https://api.allorigins.win/raw?url=https://zenquotes.io/api/random",
-    parse: data => {
-      if (typeof data === "string") data = JSON.parse(data);
-      const q = data[0];
-      return { text: q?.q, author: q?.a || "ZenQuotes" };
-    }
+    name: "Forismatic (Worker)",
+    url: "https://proxy.geanpaulofrancois.workers.dev/",
+    parse: data => ({
+      text: data.text && data.text.length <= 140 ? data.text : null,
+      author: data.author || "Forismatic"
+    })
+  },
+  {
+    name: "ZenQuotes (Worker)",
+    url: "https://zenquotes.geanpaulofrancois.workers.dev/",
+    parse: data => ({
+      text: data.text && data.text.length <= 140 ? data.text : null,
+      author: data.author || "ZenQuotes"
+    })
+  },
+  {
+    name: "TypeFit (Worker)",
+    url: "https://typefit.geanpaulofrancois.workers.dev/",
+    parse: data => ({
+      text: data.text && data.text.length <= 140 ? data.text : null,
+      author: data.author || "TypeFit"
+    })
   },
   {
     name: "DummyJSON",
@@ -278,12 +293,10 @@ const QUOTE_APIS = [
   {
     name: "FreeAPI",
     url: "https://api.freeapi.app/api/v1/public/quotes/quote/random",
-    parse: data => ({ text: data?.data?.content, author: data?.data?.author || "Unknown" })
-  },
-  {
-    name: "TypeFit (Proxy)",
-    url: "https://api.allorigins.win/raw?url=https://type.fit/api/quotes",
-    bulk: true
+    parse: data => ({
+      text: data?.data?.content,
+      author: data?.data?.author || "Unknown"
+    })
   },
   {
     name: "QuotesDB (Vercel)",
@@ -296,34 +309,21 @@ const QUOTE_APIS = [
 function normalizeQuote(text) {
   if (!text) return "";
   text = text.trim();
-
-  // Capitalize first letter
   text = text.charAt(0).toUpperCase() + text.slice(1);
-
-  // Capitalize first letter after periods, exclamations, or question marks
   return text.replace(/([.!?]\s*)(\w)/g, (_, sep, c) => sep + c.toUpperCase());
 }
 
+// ------------------ FETCH WITH RETRIES ------------------
 async function fetchQuoteFromApi(api) {
   for (let attempt = 1; attempt <= QUOTE_MAX_RETRIES; attempt++) {
     try {
       const res = await fetch(api.url, { cache: "no-store" });
-      if (!res.ok) throw new Error(res.status);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
       let data = await res.json();
+      const parsed = api.parse(data);
 
-      if (api.bulk && typeof data === "string") data = JSON.parse(data);
-
-      if (!api.bulk) {
-        const parsed = api.parse(data);
-        if (parsed.text && parsed.text.length <= 140) return parsed;
-      } else if (Array.isArray(data) && data.length) {
-        const valid = data.filter(q => q.text && q.text.length <= 140);
-        if (valid.length) {
-          const random = valid[Math.floor(Math.random() * valid.length)];
-          return { text: random.text, author: random.author || "Unknown" };
-        }
-      }
-      break;
+      if (parsed.text) return parsed;
     } catch (err) {
       const backoff = QUOTE_BACKOFF * 2 ** (attempt - 1);
       console.warn(`[Quote] ${api.name} attempt ${attempt} failed`, err);
@@ -333,33 +333,34 @@ async function fetchQuoteFromApi(api) {
   return null;
 }
 
+// ------------------ UPDATE QUOTE ------------------
 async function updateQuote() {
   const cache = JSON.parse(localStorage.getItem("quoteCache") || "{}");
-  const now = Date.now();
+  const today = new Date().toDateString();
 
-  // Render cached quote immediately without animation
+  // render cached immediately
   if (cache.text) renderQuote(cache, false);
 
-  // Only fetch if cache expired
-  if (cache.time && now - cache.time < QUOTE_FETCH_INTERVAL) return;
+  // only fetch new quote if day changed
+  if (cache.date === today) return;
 
-  const apis = [...QUOTE_APIS].sort(() => Math.random() - 0.5);
-  for (const api of apis) {
+  for (const api of QUOTE_APIS) {
     const quote = await fetchQuoteFromApi(api);
     if (quote) {
       quote.text = normalizeQuote(quote.text);
-      localStorage.setItem("quoteCache", JSON.stringify({ ...quote, time: now }));
+      localStorage.setItem("quoteCache", JSON.stringify({ ...quote, date: today }));
       renderQuote(quote, true);
       return;
     }
   }
 
-  // fallback
+  // fallback if all APIs fail
   const fallback = { text: "Stay inspired today.", author: "" };
   fallback.text = normalizeQuote(fallback.text);
   renderQuote(cache.text ? cache : fallback, false);
 }
 
+// ------------------ RENDER ------------------
 function renderQuote({ text, author } = {}, animate = true) {
   const el = document.getElementById("mantra");
   if (!el) return;
@@ -367,7 +368,6 @@ function renderQuote({ text, author } = {}, animate = true) {
   const t = text || "Stay inspired today.";
   const a = author || "";
 
-  // Only animate if text changed and animate flag is true
   if (animate && el.dataset.lastText !== t) {
     el.style.transition = "opacity 0.5s ease";
     el.style.opacity = 0;
@@ -381,7 +381,6 @@ function renderQuote({ text, author } = {}, animate = true) {
       el.dataset.lastText = t;
     }, 250);
   } else {
-    // Render instantly without animation
     el.style.transition = "none";
     el.style.opacity = 1;
     el.innerHTML = `
@@ -395,7 +394,6 @@ function renderQuote({ text, author } = {}, animate = true) {
 // ------------------ INIT ------------------
 window.addEventListener("DOMContentLoaded", () => {
   updateQuote();
-  setInterval(updateQuote, QUOTE_FETCH_INTERVAL); // auto-refresh every 5 min
 });
 
 /* =========================
