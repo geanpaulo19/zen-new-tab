@@ -253,20 +253,19 @@ function showToast(message) {
 })();
 
 /* =========================
-   RANDOM QUOTES WITH API ROTATION (Stable)
+   RANDOM QUOTES (Persistent, 5-min Interval)
 ========================= */
 
-const sleep = ms => new Promise(r => setTimeout(r, ms));
-
-const MIN_FETCH_INTERVAL = 30 * 1000; // 30 seconds between fetches
-const MAX_RETRIES = 3;
-const BASE_BACKOFF = 1000;
+const QUOTE_FETCH_INTERVAL = 5 * 60 * 1000; // 5 minutes
+const QUOTE_MAX_RETRIES = 3;
+const QUOTE_BACKOFF = 1000;
 
 const QUOTE_APIS = [
   {
     name: "ZenQuotes (Proxy)",
     url: "https://api.allorigins.win/raw?url=https://zenquotes.io/api/random",
     parse: data => {
+      if (typeof data === "string") data = JSON.parse(data);
       const q = data[0];
       return { text: q?.q, author: q?.a || "ZenQuotes" };
     }
@@ -288,88 +287,87 @@ const QUOTE_APIS = [
   }
 ];
 
-function getRandomApi() {
-  return QUOTE_APIS[Math.floor(Math.random() * QUOTE_APIS.length)];
-}
-
 async function fetchQuoteFromApi(api) {
-  let attempts = 0;
-  while (attempts < MAX_RETRIES) {
+  for (let attempt = 1; attempt <= QUOTE_MAX_RETRIES; attempt++) {
     try {
       const res = await fetch(api.url, { cache: "no-store" });
       if (!res.ok) throw new Error(res.status);
-      const data = await res.json();
+      let data = await res.json();
+
+      if (api.bulk && typeof data === "string") data = JSON.parse(data);
 
       if (!api.bulk) {
         const parsed = api.parse(data);
         if (parsed.text && parsed.text.length <= 140) return parsed;
       } else if (Array.isArray(data) && data.length) {
-        const validQuotes = data.filter(q => q.text && q.text.length <= 140);
-        if (validQuotes.length) {
-          const random = validQuotes[Math.floor(Math.random() * validQuotes.length)];
+        // TypeFit style: { text, author }
+        const valid = data.filter(q => q.text && q.text.length <= 140);
+        if (valid.length) {
+          const random = valid[Math.floor(Math.random() * valid.length)];
           return { text: random.text, author: random.author || "Unknown" };
         }
       }
       break;
     } catch (err) {
-      attempts++;
-      const backoff = BASE_BACKOFF * Math.pow(2, attempts - 1);
-      console.warn(`[Quote] ${api.name} failed (attempt ${attempts})`, err);
-      await sleep(backoff);
+      const backoff = QUOTE_BACKOFF * 2 ** (attempt - 1);
+      console.warn(`[Quote] ${api.name} attempt ${attempt} failed`, err);
+      await new Promise(r => setTimeout(r, backoff));
     }
   }
   return null;
 }
 
-async function setRandomQuote() {
-  const quoteEl = document.getElementById("mantra");
-  if (!quoteEl) return;
-
-  quoteEl.style.opacity = "0";
-  quoteEl.style.transition = "opacity 1s ease";
-
+async function updateQuote() {
   const cache = JSON.parse(localStorage.getItem("quoteCache") || "{}");
   const now = Date.now();
 
-  // Use cached quote if still fresh
-  if (cache.time && (now - cache.time) < MIN_FETCH_INTERVAL && cache.text) {
-    renderQuote(quoteEl, cache.text, cache.author);
-    return;
-  }
+  // Show cached immediately
+  if (cache.text) renderQuote(cache);
 
-  // Try APIs in random order until one succeeds
+  // Only fetch new quote if older than 5 minutes
+  if (cache.time && now - cache.time < QUOTE_FETCH_INTERVAL) return;
+
   const apis = [...QUOTE_APIS].sort(() => Math.random() - 0.5);
-  let quote = null;
   for (const api of apis) {
-    quote = await fetchQuoteFromApi(api);
-    if (quote) break;
+    const quote = await fetchQuoteFromApi(api);
+    if (quote) {
+      localStorage.setItem("quoteCache", JSON.stringify({ ...quote, time: now }));
+      renderQuote(quote);
+      return;
+    }
   }
 
-  // Fallback to cache or default if all APIs fail
-  if (!quote) {
-    quote = cache.text ? { text: cache.text, author: cache.author } : { text: "Stay inspired today.", author: "" };
-  }
-
-  localStorage.setItem("quoteCache", JSON.stringify({ ...quote, time: Date.now() }));
-  renderQuote(quoteEl, quote.text, quote.author);
+  // Fallback: show cached or default if all fail
+  renderQuote(cache.text ? cache : { text: "Stay inspired today.", author: "" });
 }
 
-function renderQuote(el, text, author) {
-  el.innerHTML = `
-    <div>"${text}"</div>
-    <div style="font-size:0.55em; margin-top:3px; opacity:0.7;">${author}</div>
-  `;
-  requestAnimationFrame(() => el.style.opacity = "1");
+function renderQuote({ text, author } = {}) {
+  const el = document.getElementById("mantra");
+  if (!el) return;
+
+  const t = text || "Stay inspired today.";
+  const a = author || "";
+
+  // Fade-out and fade-in for smooth transition
+  el.style.transition = "opacity 0.5s ease";
+  el.style.opacity = 0;
+
+  setTimeout(() => {
+    el.innerHTML = `
+      <div>"${t}"</div>
+      <div style="font-size:0.55em; margin-top:3px; opacity:0.7;">${a}</div>
+    `;
+    el.style.opacity = 1;
+  }, 250);
 }
 
-// Rotate quote every MIN_FETCH_INTERVAL for dynamic refresh
+// ------------------ INIT ------------------
 window.addEventListener("DOMContentLoaded", () => {
-  setRandomQuote();
-  setInterval(setRandomQuote, MIN_FETCH_INTERVAL);
+  updateQuote();
 });
 
 /* =========================
-   WEATHER FUNCTIONS (Chrome-safe)
+   WEATHER FUNCTIONS (Persistent, Fetch Only When Needed)
 ========================= */
 
 const WEATHER_TTL = 15 * 60 * 1000; // 15 minutes cache
@@ -389,7 +387,7 @@ const weatherVisuals = {
   95:{day:["⛈️","Thunderstorm"],night:["⛈️","Thunderstorm"]}
 };
 
-const SEVERE_CODES = new Set([61, 71, 80, 95]);
+const SEVERE_CODES = new Set([61,71,80,95]);
 
 function getWeatherVisual(code, isDay) {
   const v = weatherVisuals[code];
@@ -412,76 +410,56 @@ function animateWeatherIcon(iconEl, severe) {
   if (!iconEl) return;
   iconEl.style.display = "inline-block";
   iconEl.style.transformOrigin = "center";
+  if (iconEl._animated) return; // prevent duplicate animations
 
   let anim = "none";
   const icon = iconEl.textContent;
+  if (icon.includes("☀️") || icon.includes("🌙")) anim = "float-sun 3s ease-in-out infinite alternate";
+  else if (icon.includes("☁️") || icon.includes("⛅")) anim = "sway-cloud 4s ease-in-out infinite alternate";
+  else if (icon.includes("🌧️") || icon.includes("⛈️")) anim = severe ? "severe-pulse 1.2s ease-in-out infinite" : "shake-rain 0.6s ease-in-out infinite alternate";
 
-  if (icon.includes("☀️") || icon.includes("🌙"))
-    anim = "float-sun 3s ease-in-out infinite alternate";
-  else if (icon.includes("☁️") || icon.includes("⛅"))
-    anim = "sway-cloud 4s ease-in-out infinite alternate";
-  else if (icon.includes("🌧️") || icon.includes("⛈️"))
-    anim = severe
-      ? "severe-pulse 1.2s ease-in-out infinite"
-      : "shake-rain 0.6s ease-in-out infinite alternate";
-
-  setTimeout(() => iconEl.style.animation = anim, 50);
+  setTimeout(() => { iconEl.style.animation = anim; iconEl._animated = true; }, 50);
 }
 
-/* -------- HOURLY TOOLTIP BUILDER -------- */
 function buildHourlyTooltip(hourly, sunrise, sunset) {
   const now = new Date();
   let startIndex = hourly.time.findIndex(t => new Date(t) >= now);
   if (startIndex < 0) startIndex = 0;
 
-  let html = `<div style="font-size:.85rem;opacity:.85;margin-bottom:6px;font-weight:500">Next hours</div>`;
-  html += `<div style="display:flex;gap:8px;">`;
-
+  let html = `<div style="font-size:.85rem;opacity:.85;margin-bottom:6px;font-weight:500">Next hours</div><div style="display:flex;gap:8px;">`;
   for (let i = startIndex; i < startIndex + HOURLY_HOURS && i < hourly.time.length; i++) {
     const t = new Date(hourly.time[i]);
     const isDayHour = t >= sunrise && t < sunset;
     const v = getWeatherVisual(hourly.weathercode[i], isDayHour);
     const temp = Math.round(hourly.temperature_2m[i]);
-
-    html += `
-      <div style="
-        min-width:50px;
-        padding:6px 8px;
-        text-align:center;
-        background:rgba(255,255,255,0.15);
-        border-radius:8px;
-        font-size:.85rem;
-        font-weight:500;
-      ">
-        <div>${t.getHours().toString().padStart(2,"0")}:00</div>
-        <div style="font-size:1.2rem;">${v.icon}</div>
-        <div>${temp}°</div>
-      </div>
-    `;
+    html += `<div style="
+      min-width:50px;
+      padding:6px 8px;
+      text-align:center;
+      background:rgba(255,255,255,0.15);
+      border-radius:8px;
+      font-size:.85rem;
+      font-weight:500;
+    ">
+      <div>${t.getHours().toString().padStart(2,"0")}:00</div>
+      <div style="font-size:1.2rem;">${v.icon}</div>
+      <div>${temp}°</div>
+    </div>`;
   }
-
   html += `</div>`;
   return html;
 }
 
-/* -------- SET WEATHER & TOOLTIP -------- */
-function setWeather(el, data, offline = false) {
+function setWeather(el, data, offline=false) {
   if (!el) return;
 
-  // Show loading if no data yet
   if (!data && !offline) {
-    el.innerHTML = `
-      <span id="weather-icon" style="font-size:1.3rem;">⏳</span>
-      Loading weather...
-    `;
+    el.innerHTML = `<span id="weather-icon" style="font-size:1.3rem;">⏳</span> Loading weather...`;
     return;
   }
 
-  if (offline || !data) {
-    el.innerHTML = `
-      <span id="weather-icon" style="font-size:1.3rem;">📡</span>
-      Unable to retrieve weather data.
-    `;
+  if (!data || offline) {
+    el.innerHTML = `<span id="weather-icon" style="font-size:1.3rem;">📡</span> Unable to retrieve weather data.`;
     return;
   }
 
@@ -489,18 +467,16 @@ function setWeather(el, data, offline = false) {
   const sunrise = new Date(data.sunrise);
   const sunset = new Date(data.sunset);
   const isDayNow = now >= sunrise && now < sunset;
-
   const mainCode = data.currentWeatherCode ?? data.hourly?.weathercode?.[0] ?? 0;
   const mainVisual = getWeatherVisual(mainCode, isDayNow);
 
-  el.innerHTML = `
-    <span id="weather-icon" style="font-size:1.3rem;">${mainVisual.icon}</span>
+  el.innerHTML = `<span id="weather-icon" style="font-size:1.3rem;">${mainVisual.icon}</span>
     ${data.severe ? "⚠️ " : ""}${data.temp ?? "--"}° • ${mainVisual.desc ?? "Weather"}
-    ${data.location ? " in " + data.location : ""}
-  `;
+    ${data.location ? " in " + data.location : ""}`;
+
   animateWeatherIcon(document.getElementById("weather-icon"), data.severe);
 
-  // Tooltip (only once)
+  // Tooltip
   if (!el._weatherTooltipAdded) {
     let tip;
     el.addEventListener("mouseenter", () => {
@@ -524,8 +500,8 @@ function setWeather(el, data, offline = false) {
         white-space: nowrap;
       `;
       const rect = el.getBoundingClientRect();
-      tip.style.top = `${rect.bottom + 8}px`;
-      tip.style.left = `${rect.left + rect.width / 2}px`;
+      tip.style.top = `${Math.min(window.innerHeight - tip.offsetHeight - 8, rect.bottom + 8)}px`;
+      tip.style.left = `${Math.min(window.innerWidth - tip.offsetWidth - 8, rect.left + rect.width/2)}px`;
       tip.style.transform = "translateX(-50%)";
       document.body.appendChild(tip);
       requestAnimationFrame(()=> tip.style.opacity = "1");
@@ -540,87 +516,66 @@ function setWeather(el, data, offline = false) {
   }
 }
 
-/* -------- FETCH WEATHER DATA -------- */
-async function renderWeatherData(force = false) {
+async function fetchWeather() {
   const el = document.getElementById("weather");
   if (!el || !navigator.geolocation) return;
 
-  if (!navigator.onLine) {
-    setWeather(el, null, true);
-    return;
-  }
-
   const cached = JSON.parse(localStorage.getItem("weatherData") || "{}");
-  if (!force && cached.data && Date.now() - cached.time < WEATHER_TTL) {
-    setWeather(el, cached.data);
+  if (cached.data) setWeather(el, cached.data);
+
+  // Only fetch if cache expired
+  if (cached.data && Date.now() - cached.time < WEATHER_TTL) return;
+
+  if (!navigator.onLine) {
+    setWeather(el, cached.data || null, true);
     return;
   }
 
-  // Show loading
-  setWeather(el, null);
+  navigator.geolocation.getCurrentPosition(async pos => {
+    const { latitude, longitude } = pos.coords;
+    try {
+      const res = await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${latitude}&longitude=${longitude}&current_weather=true&hourly=temperature_2m,weathercode&daily=sunrise,sunset&timezone=auto`);
+      const json = await res.json();
 
-  navigator.geolocation.getCurrentPosition(
-    async pos => {
-      if (!pos) {
-        setWeather(el, null, true);
-        return;
-      }
-      const { latitude, longitude } = pos.coords;
+      const sunrise = new Date(json.daily.sunrise[0]);
+      const sunset  = new Date(json.daily.sunset[0]);
+      const w = json.current_weather;
+      const visual = getWeatherVisual(w.weathercode, new Date() >= sunrise && new Date() < sunset);
+      const severe = SEVERE_CODES.has(w.weathercode);
+      const location = await fetchLocationName(latitude, longitude);
 
-      try {
-        const res = await fetch(
-          `https://api.open-meteo.com/v1/forecast` +
-          `?latitude=${latitude}&longitude=${longitude}` +
-          `&current_weather=true` +
-          `&hourly=temperature_2m,weathercode` +
-          `&daily=sunrise,sunset` +
-          `&timezone=auto`
-        );
-        const json = await res.json();
+      const data = {
+        temp: Math.round(w.temperature),
+        icon: visual.icon,
+        desc: visual.desc,
+        location,
+        severe,
+        hourly: json.hourly,
+        sunrise: sunrise.toISOString(),
+        sunset: sunset.toISOString(),
+        currentWeatherCode: w.weathercode
+      };
 
-        const sunrise = new Date(json.daily.sunrise[0]);
-        const sunset  = new Date(json.daily.sunset[0]);
-
-        const w = json.current_weather;
-        const visual = getWeatherVisual(w.weathercode, new Date() >= sunrise && new Date() < sunset);
-        const severe = SEVERE_CODES.has(w.weathercode);
-        const location = await fetchLocationName(latitude, longitude);
-
-        const data = {
-          temp: Math.round(w.temperature),
-          icon: visual.icon,
-          desc: visual.desc,
-          location,
-          severe,
-          hourly: json.hourly,
-          sunrise: sunrise.toISOString(),
-          sunset: sunset.toISOString(),
-          currentWeatherCode: w.weathercode
-        };
-
-        localStorage.setItem("weatherData", JSON.stringify({ data, time: Date.now() }));
-        setWeather(el, data);
-      } catch {
-        setWeather(el, null, true);
-      }
-    },
-    err => {
-      console.warn("[Weather] Location denied or unavailable:", err);
-      setWeather(el, null, true);
-    },
-    { enableHighAccuracy: true, timeout: 5000, maximumAge: 0 }
-  );
+      localStorage.setItem("weatherData", JSON.stringify({ data, time: Date.now() }));
+      setWeather(el, data);
+    } catch (err) {
+      console.warn("[Weather] Fetch error:", err);
+      setWeather(el, cached.data || null, true);
+    }
+  }, err => {
+    console.warn("[Weather] Geolocation error:", err);
+    setWeather(el, cached.data || null, true);
+  }, { enableHighAccuracy:true, timeout:5000, maximumAge:0 });
 }
 
 /* =========================
-   FORCE REFRESH & NETWORK
+   FORCE REFRESH
 ========================= */
 window.forceWeatherRefresh = () => {
   localStorage.removeItem("weatherData");
-  renderWeatherData(true);
+  fetchWeather();
   console.log("[Weather] Forced refresh");
 };
-window.addEventListener("online", () => renderWeatherData(true));
 
 /* =========================
    ANIMATIONS
@@ -638,8 +593,7 @@ document.head.appendChild(style);
    INIT
 ========================= */
 window.addEventListener("DOMContentLoaded", () => {
-  if ("requestIdleCallback" in window) requestIdleCallback(renderWeatherData);
-  else setTimeout(renderWeatherData, 1000);
+  fetchWeather(); // fetch only if cache expired (>15 min)
 });
 
 /* =========================
