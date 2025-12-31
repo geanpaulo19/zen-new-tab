@@ -282,8 +282,8 @@ const QUOTE_APIS = [
     parse: data => ({ text: data?.data?.content, author: data?.data?.author || "Unknown" })
   },
   {
-    name: "TypeFit",
-    url: "https://type.fit/api/quotes",
+    name: "TypeFit (Proxy)",
+    url: "https://api.allorigins.win/raw?url=https://type.fit/api/quotes",
     bulk: true
   }
 ];
@@ -314,7 +314,7 @@ async function setRandomQuote() {
   const apis = [...QUOTE_APIS];
   while (apis.length && !quoteText) {
     const apiIndex = Math.floor(Math.random() * apis.length);
-    const api = apis.splice(apiIndex, 1)[0]; // remove from array after picking
+    const api = apis.splice(apiIndex, 1)[0];
     let attempts = 0;
 
     while (attempts < MAX_RETRIES) {
@@ -332,11 +332,14 @@ async function setRandomQuote() {
             break;
           }
         } else if (api.bulk && Array.isArray(data) && data.length) {
+          // Pick only one quote randomly from bulk
           const validQuotes = data.filter(q => q.text && q.text.length <= 140);
-          const random = validQuotes[Math.floor(Math.random() * validQuotes.length)];
-          quoteText = random.text;
-          quoteAuthor = random.author || "Unknown";
-          break;
+          if (validQuotes.length) {
+            const random = validQuotes[Math.floor(Math.random() * validQuotes.length)];
+            quoteText = random.text;
+            quoteAuthor = random.author || "Unknown";
+            break;
+          }
         }
       } catch (err) {
         attempts++;
