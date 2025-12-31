@@ -253,126 +253,122 @@ function showToast(message) {
 })();
 
 /* =========================
-   RANDOM SHORT QUOTE FUNCTIONS (UPDATED)
+   RANDOM QUOTES WITH API ROTATION
 ========================= */
 
-/**
- * Helper – sleep for `ms` milliseconds.
- */
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
-/**
- * Configuration – adjust these values if the API changes its limits.
- */
-const QUOTE_API          = "https://quoteslate.vercel.app/api/quotes/random";
-const MIN_FETCH_INTERVAL = 30 * 1000;   // 30 seconds between *any* two network calls
-const MAX_RETRIES        = 5;          // how many exponential‑back‑off attempts we make
-const BASE_BACKOFF       = 1_000;      // start with 1 second, then 2 s, 4 s, …
+const MIN_FETCH_INTERVAL = 30 * 1000; // 30s
+const MAX_RETRIES = 3;
+const BASE_BACKOFF = 1000;
+
+const QUOTE_APIS = [
+  {
+    name: "ZenQuotes (Proxy)",
+    url: "https://api.allorigins.win/raw?url=https://zenquotes.io/api/random",
+    parse: data => {
+      const q = data[0];
+      return { text: q?.q, author: q?.a || "ZenQuotes" };
+    }
+  },
+  {
+    name: "DummyJSON",
+    url: "https://dummyjson.com/quotes/random",
+    parse: data => ({ text: data.quote, author: data.author || "Unknown" })
+  },
+  {
+    name: "FreeAPI",
+    url: "https://api.freeapi.app/api/v1/public/quotes/quote/random",
+    parse: data => ({ text: data?.data?.content, author: data?.data?.author || "Unknown" })
+  },
+  {
+    name: "TypeFit",
+    url: "https://type.fit/api/quotes",
+    bulk: true
+  }
+];
+
+function getRandomApi() {
+  const index = Math.floor(Math.random() * QUOTE_APIS.length);
+  return QUOTE_APIS[index];
+}
 
 async function setRandomQuote() {
   const quoteEl = document.getElementById("mantra");
   if (!quoteEl) return;
 
-  // Fade out while we work
   quoteEl.style.opacity = "0";
   quoteEl.style.transition = "opacity 1s ease";
 
-  // -------------------------------------------------
-  // 1️⃣ Load cached quote (if any)
-  // -------------------------------------------------
   const cache = JSON.parse(localStorage.getItem("quoteCache") || "{}");
-  const now   = Date.now();
+  const now = Date.now();
 
-  // -------------------------------------------------
-  // 2️⃣ Decide whether we are allowed to hit the network
-  // -------------------------------------------------
-  const canFetch = !cache.time || (now - cache.time) >= MIN_FETCH_INTERVAL;
-
-  // -------------------------------------------------
-  // 3️⃣ If we can't fetch, just show the cached quote
-  // -------------------------------------------------
-  if (!canFetch && cache.text) {
+  if (cache.time && (now - cache.time) < MIN_FETCH_INTERVAL && cache.text) {
     renderQuote(quoteEl, cache.text, cache.author);
     return;
   }
 
-  // -------------------------------------------------
-  // 4️⃣ Otherwise attempt to fetch with exponential back‑off
-  // -------------------------------------------------
-  let quoteText   = "";
+  let quoteText = "";
   let quoteAuthor = "";
-  let attempts    = 0;
 
-  while (attempts < MAX_RETRIES) {
-    try {
-      const res = await fetch(QUOTE_API, { cache: "no-store" });
+  const apis = [...QUOTE_APIS];
+  while (apis.length && !quoteText) {
+    const apiIndex = Math.floor(Math.random() * apis.length);
+    const api = apis.splice(apiIndex, 1)[0]; // remove from array after picking
+    let attempts = 0;
 
-      // -------------------------------------------------
-      // 4a️⃣ 2xx – success
-      // -------------------------------------------------
-      if (res.ok) {
+    while (attempts < MAX_RETRIES) {
+      try {
+        const res = await fetch(api.url, { cache: "no-store" });
+        if (!res.ok) throw new Error(res.status);
+
         const data = await res.json();
-        if (data.quote && data.quote.length <= 120) {
-          quoteText   = data.quote;
-          quoteAuthor = (data.author || "Unknown").replace(/^[-–—]\s*/, "");
-          // Store the fresh quote in the cache for next time
-          localStorage.setItem(
-            "quoteCache",
-            JSON.stringify({ text: quoteText, author: quoteAuthor, time: Date.now() })
-          );
-          break; // success – exit retry loop
-        }
-      }
 
-      // -------------------------------------------------
-      // 4b️⃣ 429 (or any non‑OK) – treat as retry‑able
-      // -------------------------------------------------
-      attempts++;
-      const backoff = BASE_BACKOFF * Math.pow(2, attempts - 1); // 1s,2s,4s…
-      console.warn(`[Quote] Attempt ${attempts} failed (status ${res.status}). Back‑off ${backoff} ms`);
-      await sleep(backoff);
-    } catch (e) {
-      // -------------------------------------------------
-      // 4c️⃣ Network error – also retry
-      // -------------------------------------------------
-      attempts++;
-      const backoff = BASE_BACKOFF * Math.pow(2, attempts - 1);
-      console.warn(`[Quote] Network error on attempt ${attempts}:`, e);
-      await sleep(backoff);
+        if (!api.bulk) {
+          const parsed = api.parse(data);
+          if (parsed.text && parsed.text.length <= 140) {
+            quoteText = parsed.text;
+            quoteAuthor = parsed.author;
+            break;
+          }
+        } else if (api.bulk && Array.isArray(data) && data.length) {
+          const validQuotes = data.filter(q => q.text && q.text.length <= 140);
+          const random = validQuotes[Math.floor(Math.random() * validQuotes.length)];
+          quoteText = random.text;
+          quoteAuthor = random.author || "Unknown";
+          break;
+        }
+      } catch (err) {
+        attempts++;
+        const backoff = BASE_BACKOFF * Math.pow(2, attempts - 1);
+        console.warn(`[Quote] ${api.name} failed (attempt ${attempts})`, err);
+        await sleep(backoff);
+      }
     }
   }
 
-  // -------------------------------------------------
-  // 5️⃣ If we still have nothing, fall back to cache or default
-  // -------------------------------------------------
   if (!quoteText) {
     if (cache.text) {
-      quoteText   = cache.text;
+      quoteText = cache.text;
       quoteAuthor = cache.author;
     } else {
-      quoteText   = "Stay inspired today!";
+      quoteText = "Stay inspired today.";
       quoteAuthor = "";
     }
   }
 
-  // -------------------------------------------------
-  // 6️⃣ Render (fade‑in) the final quote
-  // -------------------------------------------------
+  localStorage.setItem("quoteCache", JSON.stringify({ text: quoteText, author: quoteAuthor, time: Date.now() }));
   renderQuote(quoteEl, quoteText, quoteAuthor);
 }
 
-/**
- * Helper – writes the quote into the DOM and fades it back in.
- */
 function renderQuote(el, text, author) {
   el.innerHTML = `
     <div>"${text}"</div>
     <div style="font-size:0.55em; margin-top:3px; opacity:0.7;">${author}</div>
   `;
-  requestAnimationFrame(() => el.style.opacity = "1");
+  requestAnimationFrame(() => (el.style.opacity = "1"));
 }
 
-/* Kick‑off on first load */
 window.addEventListener("DOMContentLoaded", setRandomQuote);
 
 /* =========================
