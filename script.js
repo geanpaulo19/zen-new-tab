@@ -730,7 +730,7 @@ function setBackground(url, author) {
   if (author) {
     const credit = document.createElement("div");
     credit.id = "unsplash-credit";
-    credit.textContent = "©";
+    credit.textContent = "📷";
     credit.style.cssText = `position:fixed;bottom:12px;right:12px;width:24px;height:24px;display:flex;align-items:center;justify-content:center;font-size:0.85rem;color:rgba(255,255,255,0.6);background:rgba(0,0,0,0.15);border-radius:50%;z-index:10;cursor:default;transition: background 0.2s, color 0.2s;`;
     let tooltip;
     credit.addEventListener("mouseenter", () => {
@@ -827,7 +827,7 @@ function createParticleToggle() {
   if (!info) return;
   const btn = document.createElement("button");
   btn.id = "particle-toggle";
-  btn.textContent = "✦";
+  btn.textContent = "🌟";
   btn.title = "Toggle particles";
   btn.style.cssText = "position:fixed;bottom:12px;left:44px;width:24px;height:24px;border-radius:50%;border:none;background:rgba(0,0,0,0.15);color:rgba(255,255,255,0.6);font-size:0.8rem;cursor:pointer;z-index:10;transition: background 0.2s, color 0.2s;";
   btn.onmouseenter = () => { btn.style.background = "rgba(0,0,0,0.3)"; btn.style.color = "rgba(255,255,255,0.9)"; };
@@ -843,7 +843,7 @@ function createForceRefreshButton() {
 
   const btn = document.createElement("button");
   btn.id = "force-refresh-btn";
-  btn.textContent = "⟳";
+  btn.textContent = "🌀";
   btn.title = "Force refresh all data";
   btn.style.cssText = `
     position:fixed;
