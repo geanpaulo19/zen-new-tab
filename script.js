@@ -253,7 +253,7 @@ function showToast(message) {
 })();
 
 /* =========================
-   RANDOM QUOTES (Persistent, 5-min Interval)
+   RANDOM QUOTES (Persistent, 5-min Interval, Vercel Included)
 ========================= */
 
 const QUOTE_FETCH_INTERVAL = 5 * 60 * 1000; // 5 minutes
@@ -284,8 +284,19 @@ const QUOTE_APIS = [
     name: "TypeFit (Proxy)",
     url: "https://api.allorigins.win/raw?url=https://type.fit/api/quotes",
     bulk: true
+  },
+  {
+    name: "QuotesDB (Vercel)",
+    url: "https://quotes-db.vercel.app/api/random",
+    parse: data => ({ text: data.quote, author: data.author || "Unknown" })
   }
 ];
+
+function normalizeQuote(text) {
+  if (!text) return "";
+  text = text.trim();
+  return text.charAt(0).toUpperCase() + text.slice(1).toLowerCase();
+}
 
 async function fetchQuoteFromApi(api) {
   for (let attempt = 1; attempt <= QUOTE_MAX_RETRIES; attempt++) {
@@ -300,7 +311,6 @@ async function fetchQuoteFromApi(api) {
         const parsed = api.parse(data);
         if (parsed.text && parsed.text.length <= 140) return parsed;
       } else if (Array.isArray(data) && data.length) {
-        // TypeFit style: { text, author }
         const valid = data.filter(q => q.text && q.text.length <= 140);
         if (valid.length) {
           const random = valid[Math.floor(Math.random() * valid.length)];
@@ -321,57 +331,74 @@ async function updateQuote() {
   const cache = JSON.parse(localStorage.getItem("quoteCache") || "{}");
   const now = Date.now();
 
-  // Show cached immediately
-  if (cache.text) renderQuote(cache);
+  // Render cached quote immediately without animation
+  if (cache.text) renderQuote(cache, false);
 
-  // Only fetch new quote if older than 5 minutes
+  // Only fetch if cache expired
   if (cache.time && now - cache.time < QUOTE_FETCH_INTERVAL) return;
 
   const apis = [...QUOTE_APIS].sort(() => Math.random() - 0.5);
   for (const api of apis) {
     const quote = await fetchQuoteFromApi(api);
     if (quote) {
+      quote.text = normalizeQuote(quote.text);
       localStorage.setItem("quoteCache", JSON.stringify({ ...quote, time: now }));
-      renderQuote(quote);
+      renderQuote(quote, true);
       return;
     }
   }
 
-  // Fallback: show cached or default if all fail
-  renderQuote(cache.text ? cache : { text: "Stay inspired today.", author: "" });
+  // fallback
+  const fallback = { text: "Stay inspired today.", author: "" };
+  fallback.text = normalizeQuote(fallback.text);
+  renderQuote(cache.text ? cache : fallback, false);
 }
 
-function renderQuote({ text, author } = {}) {
+function renderQuote({ text, author } = {}, animate = true) {
   const el = document.getElementById("mantra");
   if (!el) return;
 
   const t = text || "Stay inspired today.";
   const a = author || "";
 
-  // Fade-out and fade-in for smooth transition
-  el.style.transition = "opacity 0.5s ease";
-  el.style.opacity = 0;
+  // Only animate if text changed and animate flag is true
+  if (animate && el.dataset.lastText !== t) {
+    el.style.transition = "opacity 0.5s ease";
+    el.style.opacity = 0;
 
-  setTimeout(() => {
+    setTimeout(() => {
+      el.innerHTML = `
+        <div>"${t}"</div>
+        <div style="font-size:0.55em; margin-top:3px; opacity:0.7;">${a}</div>
+      `;
+      el.style.opacity = 1;
+      el.dataset.lastText = t;
+    }, 250);
+  } else {
+    // Render instantly without animation
+    el.style.transition = "none";
+    el.style.opacity = 1;
     el.innerHTML = `
       <div>"${t}"</div>
       <div style="font-size:0.55em; margin-top:3px; opacity:0.7;">${a}</div>
     `;
-    el.style.opacity = 1;
-  }, 250);
+    el.dataset.lastText = t;
+  }
 }
 
 // ------------------ INIT ------------------
 window.addEventListener("DOMContentLoaded", () => {
   updateQuote();
+  setInterval(updateQuote, QUOTE_FETCH_INTERVAL); // auto-refresh every 5 min
 });
 
 /* =========================
-   WEATHER FUNCTIONS (Persistent, Fetch Only When Needed)
+   WEATHER FUNCTIONS (Persistent, Apple-like Refresh)
 ========================= */
 
 const WEATHER_TTL = 15 * 60 * 1000; // 15 minutes cache
 const HOURLY_HOURS = 6;
+const LOCATION_THRESHOLD = 1; // km, only fetch if moved more than this distance
 
 const weatherVisuals = {
   0:{day:["☀️","Clear"],night:["🌙","Clear night"]},
@@ -406,11 +433,21 @@ async function fetchLocationName(lat, lon) {
   }
 }
 
+// Haversine formula to calculate distance between two lat/lon in km
+function distanceKm(lat1, lon1, lat2, lon2) {
+  const R = 6371; // Earth radius km
+  const dLat = (lat2-lat1)*Math.PI/180;
+  const dLon = (lon2-lon1)*Math.PI/180;
+  const a = Math.sin(dLat/2)**2 + Math.cos(lat1*Math.PI/180)*Math.cos(lat2*Math.PI/180)*Math.sin(dLon/2)**2;
+  const c = 2*Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+  return R*c;
+}
+
 function animateWeatherIcon(iconEl, severe) {
   if (!iconEl) return;
   iconEl.style.display = "inline-block";
   iconEl.style.transformOrigin = "center";
-  if (iconEl._animated) return; // prevent duplicate animations
+  if (iconEl._animated) return;
 
   let anim = "none";
   const icon = iconEl.textContent;
@@ -455,11 +492,13 @@ function setWeather(el, data, offline=false) {
 
   if (!data && !offline) {
     el.innerHTML = `<span id="weather-icon" style="font-size:1.3rem;">⏳</span> Loading weather...`;
+    el.removeAttribute("data-last-updated");
     return;
   }
 
   if (!data || offline) {
     el.innerHTML = `<span id="weather-icon" style="font-size:1.3rem;">📡</span> Unable to retrieve weather data.`;
+    el.removeAttribute("data-last-updated");
     return;
   }
 
@@ -474,9 +513,12 @@ function setWeather(el, data, offline=false) {
     ${data.severe ? "⚠️ " : ""}${data.temp ?? "--"}° • ${mainVisual.desc ?? "Weather"}
     ${data.location ? " in " + data.location : ""}`;
 
+  // Store last updated timestamp
+  el.dataset.lastUpdated = new Date().toISOString();
+
   animateWeatherIcon(document.getElementById("weather-icon"), data.severe);
 
-  // Tooltip
+  // Hourly forecast tooltip
   if (!el._weatherTooltipAdded) {
     let tip;
     el.addEventListener("mouseenter", () => {
@@ -514,6 +556,47 @@ function setWeather(el, data, offline=false) {
     });
     el._weatherTooltipAdded = true;
   }
+
+  // Last updated tooltip
+  if (!el._lastUpdatedTooltipAdded) {
+    let lastTip;
+    el.addEventListener("mouseenter", () => {
+      if (lastTip) return;
+      const ts = el.dataset.lastUpdated;
+      if (!ts) return;
+
+      lastTip = document.createElement("div");
+      lastTip.textContent = `Last updated: ${new Date(ts).toLocaleTimeString()}`;
+      lastTip.style.cssText = `
+        position: fixed;
+        background: rgba(0,0,0,0.7);
+        color: #fff;
+        padding: 4px 8px;
+        border-radius: 8px;
+        font-size: 0.75rem;
+        pointer-events: none;
+        opacity: 0;
+        z-index: 9999;
+        transition: opacity 0.2s ease;
+      `;
+      document.body.appendChild(lastTip);
+
+      const rect = el.getBoundingClientRect();
+      lastTip.style.left = `${rect.left + rect.width/2}px`;
+      lastTip.style.top = `${rect.top - 28}px`;
+      lastTip.style.transform = "translateX(-50%)";
+      requestAnimationFrame(() => lastTip.style.opacity = "1");
+    });
+
+    el.addEventListener("mouseleave", () => {
+      if (!lastTip) return;
+      lastTip.style.opacity = "0";
+      setTimeout(() => lastTip?.remove(), 200);
+      lastTip = null;
+    });
+
+    el._lastUpdatedTooltipAdded = true;
+  }
 }
 
 async function fetchWeather() {
@@ -521,18 +604,26 @@ async function fetchWeather() {
   if (!el || !navigator.geolocation) return;
 
   const cached = JSON.parse(localStorage.getItem("weatherData") || "{}");
-  if (cached.data) setWeather(el, cached.data);
-
-  // Only fetch if cache expired
-  if (cached.data && Date.now() - cached.time < WEATHER_TTL) return;
-
-  if (!navigator.onLine) {
-    setWeather(el, cached.data || null, true);
-    return;
-  }
+  const cachedLoc = cached.lat && cached.lon ? {lat: cached.lat, lon: cached.lon} : null;
 
   navigator.geolocation.getCurrentPosition(async pos => {
     const { latitude, longitude } = pos.coords;
+
+    const needFetch = !cached.data ||
+      Date.now() - cached.time > WEATHER_TTL ||
+      !cachedLoc ||
+      distanceKm(latitude, longitude, cachedLoc.lat, cachedLoc.lon) > LOCATION_THRESHOLD;
+
+    if (!navigator.onLine) {
+      setWeather(el, cached.data || null, true);
+      return;
+    }
+
+    if (!needFetch) {
+      setWeather(el, cached.data);
+      return;
+    }
+
     try {
       const res = await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${latitude}&longitude=${longitude}&current_weather=true&hourly=temperature_2m,weathercode&daily=sunrise,sunset&timezone=auto`);
       const json = await res.json();
@@ -556,8 +647,9 @@ async function fetchWeather() {
         currentWeatherCode: w.weathercode
       };
 
-      localStorage.setItem("weatherData", JSON.stringify({ data, time: Date.now() }));
+      localStorage.setItem("weatherData", JSON.stringify({ data, time: Date.now(), lat: latitude, lon: longitude }));
       setWeather(el, data);
+
     } catch (err) {
       console.warn("[Weather] Fetch error:", err);
       setWeather(el, cached.data || null, true);
@@ -593,7 +685,8 @@ document.head.appendChild(style);
    INIT
 ========================= */
 window.addEventListener("DOMContentLoaded", () => {
-  fetchWeather(); // fetch only if cache expired (>15 min)
+  fetchWeather(); // fetch on load
+  setInterval(fetchWeather, WEATHER_TTL); // auto-refresh every 15 min
 });
 
 /* =========================
