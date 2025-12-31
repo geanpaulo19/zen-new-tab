@@ -292,10 +292,16 @@ const QUOTE_APIS = [
   }
 ];
 
+// ------------------ NORMALIZATION ------------------
 function normalizeQuote(text) {
   if (!text) return "";
   text = text.trim();
-  return text.charAt(0).toUpperCase() + text.slice(1).toLowerCase();
+
+  // Capitalize first letter
+  text = text.charAt(0).toUpperCase() + text.slice(1);
+
+  // Capitalize first letter after periods, exclamations, or question marks
+  return text.replace(/([.!?]\s*)(\w)/g, (_, sep, c) => sep + c.toUpperCase());
 }
 
 async function fetchQuoteFromApi(api) {
@@ -830,7 +836,64 @@ function createParticleToggle() {
   document.body.appendChild(btn);
 }
 
+function createForceRefreshButton() {
+  if (document.getElementById("force-refresh-btn")) return;
+  const info = document.getElementById("privacy-btn");
+  if (!info) return;
+
+  const btn = document.createElement("button");
+  btn.id = "force-refresh-btn";
+  btn.textContent = "⟳";
+  btn.title = "Force refresh all data";
+  btn.style.cssText = `
+    position:fixed;
+    bottom:12px;
+    left:76px; /* next to particles button */
+    width:24px;
+    height:24px;
+    border-radius:50%;
+    border:none;
+    background:rgba(0,0,0,0.15);
+    color:rgba(255,255,255,0.6);
+    font-size:0.8rem;
+    cursor:pointer;
+    z-index:10;
+    transition: background 0.2s, color 0.2s;
+  `;
+  btn.onmouseenter = () => { btn.style.background = "rgba(0,0,0,0.3)"; btn.style.color = "rgba(255,255,255,0.9)"; };
+  btn.onmouseleave = () => { btn.style.background = "rgba(0,0,0,0.15)"; btn.style.color = "rgba(255,255,255,0.6)"; };
+  btn.onclick = () => {
+    // Show instant feedback
+    showToast("Refreshing...");
+
+    // Clear caches
+    localStorage.removeItem("quoteCache");
+    localStorage.removeItem("weatherData");
+    localStorage.removeItem("bgCache");
+
+    // Update UI instantly with fallback data
+    renderQuote({ text: "Stay inspired today.", author: "" }, true);
+    setWeather(document.getElementById("weather"), null, true);
+    setBackground("", "");
+
+    // Fetch all in background
+    updateQuote().then(() => console.log("[Quote] Refreshed"));
+    fetchWeather().then(() => console.log("[Weather] Refreshed"));
+    fetchRandomBackground().then(result => {
+      setBackground(result.url, result.author);
+      localStorage.setItem("bgCache", JSON.stringify({ ...result, date: new Date().toISOString().slice(0,10) }));
+      console.log("[Background] Refreshed");
+    });
+  };
+  document.body.appendChild(btn);
+}
+
+window.addEventListener("DOMContentLoaded", () => {
+  createForceRefreshButton();
+});
+
 window.addEventListener("DOMContentLoaded", () => {
   initParticles();
   createParticleToggle();
+  createForceRefreshButton();
 });
