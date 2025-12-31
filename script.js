@@ -375,7 +375,7 @@ window.addEventListener("DOMContentLoaded", setRandomQuote);
    WEATHER FUNCTIONS
 ========================= */
 
-const WEATHER_TTL = 15 * 60 * 1000;
+const WEATHER_TTL = 15 * 60 * 1000; // 15 minutes cache
 const HOURLY_HOURS = 6;
 
 const weatherVisuals = {
@@ -473,6 +473,8 @@ function buildHourlyTooltip(hourly, sunrise, sunset) {
 
 /* -------- SET WEATHER & TOOLTIP -------- */
 function setWeather(el, data, offline = false) {
+  if (!el) return;
+
   if (offline) {
     el.innerHTML = `
       <span id="weather-icon" style="font-size:1.3rem;">📡</span>
@@ -496,7 +498,7 @@ function setWeather(el, data, offline = false) {
   `;
   animateWeatherIcon(document.getElementById("weather-icon"), data.severe);
 
-  // Tooltip (only create once)
+  // Tooltip (only once)
   if (!el._weatherTooltipAdded) {
     let tip;
     el.addEventListener("mouseenter", () => {
@@ -552,46 +554,59 @@ async function renderWeatherData(force = false) {
     return;
   }
 
-  navigator.geolocation.getCurrentPosition(async pos => {
-    const { latitude, longitude } = pos.coords;
+  // Ask for location permission
+  navigator.geolocation.getCurrentPosition(
+    async pos => {
+      const { latitude, longitude } = pos.coords;
 
-    try {
-      const res = await fetch(
-        `https://api.open-meteo.com/v1/forecast` +
-        `?latitude=${latitude}&longitude=${longitude}` +
-        `&current_weather=true` +
-        `&hourly=temperature_2m,weathercode` +
-        `&daily=sunrise,sunset` +
-        `&timezone=auto`
-      );
-      const json = await res.json();
+      try {
+        const res = await fetch(
+          `https://api.open-meteo.com/v1/forecast` +
+          `?latitude=${latitude}&longitude=${longitude}` +
+          `&current_weather=true` +
+          `&hourly=temperature_2m,weathercode` +
+          `&daily=sunrise,sunset` +
+          `&timezone=auto`
+        );
+        const json = await res.json();
 
-      const sunrise = new Date(json.daily.sunrise[0]);
-      const sunset  = new Date(json.daily.sunset[0]);
+        const sunrise = new Date(json.daily.sunrise[0]);
+        const sunset  = new Date(json.daily.sunset[0]);
 
-      const w = json.current_weather;
-      const visual = getWeatherVisual(w.weathercode, new Date() >= sunrise && new Date() < sunset);
-      const severe = SEVERE_CODES.has(w.weathercode);
-      const location = await fetchLocationName(latitude, longitude);
+        const w = json.current_weather;
+        const visual = getWeatherVisual(w.weathercode, new Date() >= sunrise && new Date() < sunset);
+        const severe = SEVERE_CODES.has(w.weathercode);
+        const location = await fetchLocationName(latitude, longitude);
 
-      const data = {
-        temp: Math.round(w.temperature),
-        icon: visual.icon,
-        desc: visual.desc,
-        location,
-        severe,
-        hourly: json.hourly,
-        sunrise: sunrise.toISOString(),
-        sunset: sunset.toISOString(),
-        currentWeatherCode: w.weathercode
-      };
+        const data = {
+          temp: Math.round(w.temperature),
+          icon: visual.icon,
+          desc: visual.desc,
+          location,
+          severe,
+          hourly: json.hourly,
+          sunrise: sunrise.toISOString(),
+          sunset: sunset.toISOString(),
+          currentWeatherCode: w.weathercode
+        };
 
-      localStorage.setItem("weatherData", JSON.stringify({ data, time: Date.now() }));
-      setWeather(el, data);
-    } catch {
-      setWeather(el, null, true);
-    }
-  });
+        localStorage.setItem("weatherData", JSON.stringify({ data, time: Date.now() }));
+        setWeather(el, data);
+      } catch {
+        setWeather(el, null, true);
+      }
+    },
+    err => {
+      console.warn("[Weather] Location denied or unavailable:", err);
+      // Hide element and remove tooltip if denied
+      el.style.display = "none";
+      if (el._weatherTooltipAdded) {
+        const existingTip = document.getElementById("weather-tip");
+        existingTip?.remove();
+      }
+    },
+    { enableHighAccuracy: true, timeout: 5000, maximumAge: 0 }
+  );
 }
 
 /* =========================
